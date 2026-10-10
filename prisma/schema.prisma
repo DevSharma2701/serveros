@@ -1,0 +1,1389 @@
+// ServeOS database schema.
+//
+// Conventions
+// - Money is stored as integer minor units (paise for INR) in columns ending in `Minor`.
+// - Percentages are stored as basis points (1% = 100 bps) in columns ending in `Bps`.
+// - Stock quantities are exact decimals expressed in the ingredient's base unit.
+// - Every restaurant-owned table carries `restaurantId`; outlet data also carries `outletId`.
+// - Financial rows (orders, payments, refunds, invoices, cash and stock movements) are never
+//   deleted. They are corrected with new rows (void, refund, reversal, adjustment).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ───────────────────────────── Tenancy ─────────────────────────────
+
+enum RoundOffMode {
+  NONE
+  NEAREST_UNIT // round the grand total to the nearest whole currency unit
+}
+
+enum InventoryPolicy {
+  NONE // sales never touch stock
+  ON_CONFIRM // deduct when the order is confirmed and sent to the kitchen
+  ON_COMPLETE // deduct when the order is completed
+}
+
+model Restaurant {
+  id           String  @id @default(uuid(7)) @db.Uuid
+  name         String
+  legalName    String
+  slug         String  @unique
+  gstin        String?
+  currency     String  @default("INR") @db.Char(3)
+  addressLine1 String  @default("")
+  city         String  @default("")
+  stateCode    String  @default("") // GST state code, e.g. "27" for Maharashtra
+  postalCode   String  @default("")
+  isActive     Boolean @default(true)
+
+  // Billing rules
+  pricesIncludeTax           Boolean      @default(false)
+  serviceChargeBps           Int          @default(0)
+  serviceChargeTaxCategoryId String?      @db.Uuid
+  deliveryChargeTaxCategoryId String?     @db.Uuid
+  roundOffMode               RoundOffMode @default(NEAREST_UNIT)
+  receiptFooter              String       @default("")
+  invoicePrefix              String       @default("INV")
+
+  // Controls
+  discountApprovalThresholdBps      Int             @default(1500)
+  cashVarianceApprovalThresholdMinor Int            @default(50000)
+  allowPartialPayment               Boolean         @default(false)
+  inventoryPolicy                   InventoryPolicy @default(ON_CONFIRM)
+  allowNegativeStock                Boolean         @default(false)
+
+  // Loyalty
+  loyaltyEnabled          Boolean @default(false)
+  loyaltyEarnPointsPer100 Int     @default(1) // points earned per 100 major currency units paid
+  loyaltyPointValueMinor  Int     @default(100) // value of one point when redeemed
+  loyaltyMinRedeemPoints  Int     @default(50)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  outlets         Outlet[]
+  users           User[]
+  roles           Role[]
+  categories      Category[]
+  products        Product[]
+  modifierGroups  ModifierGroup[]
+  taxCategories   TaxCategory[]
+  discounts       Discount[]
+  customers       Customer[]
+  ingredients     Ingredient[]
+  units           UnitOfMeasure[]
+  suppliers       Supplier[]
+  orders          Order[]
+  auditEvents     AuditEvent[]
+}
+
+model Outlet {
+  id           String  @id @default(uuid(7)) @db.Uuid
+  restaurantId String  @db.Uuid
+  name         String
+  code         String // short code used in document numbers, e.g. "BLR1"
+  addressLine1 String  @default("")
+  city         String  @default("")
+  stateCode    String  @default("")
+  postalCode   String  @default("")
+  phone        String  @default("")
+  gstin        String?
+  fssaiNumber  String?
+  timezone     String  @default("Asia/Kolkata")
+  isActive     Boolean @default(true)
+
+  serviceChargeEnabled Boolean @default(false)
+  deliveryChargeMinor  Int     @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  restaurant        Restaurant             @relation(fields: [restaurantId], references: [id])
+  assignments       UserOutletAssignment[]
+  diningAreas       DiningArea[]
+  tables            RestaurantTable[]
+  stations          KitchenStation[]
+  orders            Order[]
+  kitchenTickets    KitchenTicket[]
+  registers         CashRegister[]
+  shifts            CashShift[]
+  balances          InventoryBalance[]
+  movements         InventoryMovement[]
+  productSettings   OutletProductSetting[]
+  variantPrices     OutletVariantPrice[]
+  sequences         DocumentSequence[]
+  invoices          Invoice[]
+  purchaseOrders    PurchaseOrder[]
+  goodsReceipts     GoodsReceipt[]
+  stockCounts       StockCount[]
+  reservations      Reservation[]
+  attendance        Attendance[]
+  schedules         ShiftSchedule[]
+
+  @@unique([restaurantId, code])
+  @@index([restaurantId])
+}
+
+// ───────────────────────────── Identity & access ─────────────────────────────
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  DISABLED
+}
+
+model User {
+  id              String     @id @default(uuid(7)) @db.Uuid
+  restaurantId    String?    @db.Uuid // null only for platform admins
+  roleId          String     @db.Uuid
+  email           String     @unique
+  name            String
+  phone           String     @default("")
+  employeeCode    String     @default("")
+  jobTitle        String     @default("")
+  passwordHash    String?
+  status          UserStatus @default(INVITED)
+  allOutlets      Boolean    @default(false) // true: may act in every outlet of the restaurant
+  failedLoginCount Int       @default(0)
+  lockedUntil     DateTime?  @db.Timestamptz(3)
+  lastLoginAt     DateTime?  @db.Timestamptz(3)
+  createdAt       DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime   @updatedAt @db.Timestamptz(3)
+
+  restaurant  Restaurant?            @relation(fields: [restaurantId], references: [id])
+  role        Role                   @relation(fields: [roleId], references: [id])
+  assignments UserOutletAssignment[]
+  grants      UserPermissionGrant[]
+  sessions    UserSession[]
+  tokens      UserToken[]
+  attendance  Attendance[]
+  schedules   ShiftSchedule[]
+
+  @@index([restaurantId])
+}
+
+model Role {
+  id           String  @id @default(uuid(7)) @db.Uuid
+  restaurantId String? @db.Uuid // null: built-in system role shared by all restaurants
+  key          String
+  name         String
+  rank         Int // higher rank = more authority; users can only manage lower ranks
+  isSystem     Boolean @default(false)
+
+  restaurant  Restaurant?      @relation(fields: [restaurantId], references: [id])
+  permissions RolePermission[]
+  users       User[]
+
+  @@unique([restaurantId, key])
+}
+
+model Permission {
+  key         String @id
+  category    String
+  description String
+
+  roles  RolePermission[]
+  grants UserPermissionGrant[]
+}
+
+model RolePermission {
+  roleId        String @db.Uuid
+  permissionKey String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionKey], references: [key], onDelete: Cascade)
+
+  @@id([roleId, permissionKey])
+}
+
+model UserOutletAssignment {
+  userId   String @db.Uuid
+  outletId String @db.Uuid
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  outlet Outlet @relation(fields: [outletId], references: [id], onDelete: Cascade)
+
+  @@id([userId, outletId])
+  @@index([outletId])
+}
+
+/// Extra permission given to one user on top of their role, optionally limited to one outlet.
+model UserPermissionGrant {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  userId        String   @db.Uuid
+  permissionKey String
+  outletId      String?  @db.Uuid
+  grantedById   String   @db.Uuid
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionKey], references: [key], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model UserSession {
+  id               String    @id @default(uuid(7)) @db.Uuid
+  userId           String    @db.Uuid
+  refreshTokenHash String    @unique
+  userAgent        String    @default("")
+  ip               String    @default("")
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+  lastUsedAt       DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt        DateTime  @db.Timestamptz(3)
+  revokedAt        DateTime? @db.Timestamptz(3)
+  revokedReason    String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+enum UserTokenPurpose {
+  PASSWORD_RESET
+  INVITE
+}
+
+model UserToken {
+  id        String           @id @default(uuid(7)) @db.Uuid
+  userId    String           @db.Uuid
+  purpose   UserTokenPurpose
+  tokenHash String           @unique
+  expiresAt DateTime         @db.Timestamptz(3)
+  usedAt    DateTime?        @db.Timestamptz(3)
+  createdAt DateTime         @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model AuditEvent {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  restaurantId  String?  @db.Uuid
+  outletId      String?  @db.Uuid
+  actorId       String?  @db.Uuid
+  actorName     String   @default("")
+  action        String // e.g. "order.cancel", "staff.role_change"
+  entityType    String
+  entityId      String   @default("")
+  metadata      Json     @default("{}")
+  ip            String   @default("")
+  correlationId String   @default("")
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  restaurant Restaurant? @relation(fields: [restaurantId], references: [id])
+
+  @@index([restaurantId, createdAt])
+  @@index([restaurantId, entityType, entityId])
+}
+
+model Attendance {
+  id           String    @id @default(uuid(7)) @db.Uuid
+  restaurantId String    @db.Uuid
+  outletId     String    @db.Uuid
+  userId       String    @db.Uuid
+  clockInAt    DateTime  @default(now()) @db.Timestamptz(3)
+  clockOutAt   DateTime? @db.Timestamptz(3)
+  note         String    @default("")
+
+  outlet Outlet @relation(fields: [outletId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@index([restaurantId, outletId, clockInAt])
+  @@index([userId, clockOutAt])
+}
+
+model ShiftSchedule {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  restaurantId String   @db.Uuid
+  outletId     String   @db.Uuid
+  userId       String   @db.Uuid
+  startsAt     DateTime @db.Timestamptz(3)
+  endsAt       DateTime @db.Timestamptz(3)
+  note         String   @default("")
+  createdById  String   @db.Uuid
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  outlet Outlet @relation(fields: [outletId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@index([restaurantId, outletId, startsAt])
+}
+
+// ───────────────────────────── Tax & discounts ─────────────────────────────
+
+enum TaxComponent {
+  CGST
+  SGST
+  IGST
+  CESS
+  VAT
+  OTHER
+}
+
+enum TaxScope {
+  ANY // always applies
+  INTRA_STATE // applies when supply is within the outlet's state
+  INTER_STATE // applies when supply is to another state
+}
+
+model TaxCategory {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  restaurantId String   @db.Uuid
+  name         String
+  hsnSac       String   @default("")
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id])
+  rules      TaxRule[]
+  products   Product[]
+
+  @@unique([restaurantId, name])
+}
+
+model TaxRule {
+  id            String       @id @default(uuid(7)) @db.Uuid
+  taxCategoryId String       @db.Uuid
+  component     TaxComponent
+  name          String // label printed on the receipt, e.g. "CGST 2.5%"
+  rateBps       Int
+  scope         TaxScope     @default(ANY)
+  isActive      Boolean      @default(true)
+
+  taxCategory TaxCategory @relation(fields: [taxCategoryId], references: [id], onDelete: Cascade)
+
+  @@index([taxCategoryId])
+}
+
+enum DiscountType {
+  PERCENT
+  FLAT
+}
+
+model Discount {
+  id               String       @id @default(uuid(7)) @db.Uuid
+  restaurantId     String       @db.Uuid
+  name             String
+  code             String? // coupon code; null for a named discount picked from a list
+  type             DiscountType
+  value            Int // bps when PERCENT, minor units when FLAT
+  maxDiscountMinor Int?
+  minOrderMinor    Int          @default(0)
+  usageLimit       Int?
+  usedCount        Int          @default(0)
+  validFrom        DateTime?    @db.Timestamptz(3)
+  validTo          DateTime?    @db.Timestamptz(3)
+  isActive         Boolean      @default(true)
+  createdAt        DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime     @updatedAt @db.Timestamptz(3)
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id])
+  orders     Order[]
+
+  @@unique([restaurantId, code])
+}
+
+// ───────────────────────────── Menu ─────────────────────────────
+
+model Category {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  restaurantId String   @db.Uuid
+  parentId     String?  @db.Uuid
+  name         String
+  sortOrder    Int      @default(0)
+  isActive     Boolean  @default(true)
+  stationId    String?  @db.Uuid // default kitchen station for products in this category
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id])
+  parent     Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children   Category[] @relation("CategoryTree")
+  products   Product[]
+
+  @@index([restaurantId, sortOrder])
+}
+
+model Product {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  restaurantId  String   @db.Uuid
+  categoryId    String   @db.Uuid
+  taxCategoryId String?  @db.Uuid
+  name          String
+  sku           String
+  description   String   @default("")
+  imageUrl      String?
+  isVeg         Boolean? // Indian menus mark vegetarian / non-vegetarian items
+  isActive      Boolean  @default(true)
+  isFavorite    Boolean  @default(false)
+  stationKey    String? // routes to the outlet's kitchen station with this key
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @db.Timestamptz(3)
+
+  restaurant     Restaurant             @relation(fields: [restaurantId], references: [id])
+  category       Category               @relation(fields: [categoryId], references: [id])
+  taxCategory    TaxCategory?           @relation(fields: [taxCategoryId], references: [id])
+  variants       ProductVariant[]
+  modifierGroups ProductModifierGroup[]
+  outletSettings OutletProductSetting[]
+  recipes        Recipe[]
+
+  @@unique([restaurantId, sku])
+  @@index([restaurantId, categoryId])
+}
+
+model ProductVariant {
+  id         String  @id @default(uuid(7)) @db.Uuid
+  productId  String  @db.Uuid
+  name       String // "Regular", "Half", "Large" ...
+  priceMinor Int
+  isDefault  Boolean @default(false)
+  isActive   Boolean @default(true)
+  sortOrder  Int     @default(0)
+
+  product      Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
+  outletPrices OutletVariantPrice[]
+  recipes      Recipe[]
+
+  @@index([productId])
+}
+
+model ModifierGroup {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  restaurantId String   @db.Uuid
+  name         String
+  minSelect    Int      @default(0) // >= 1 makes the group required
+  maxSelect    Int      @default(1)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  restaurant Restaurant             @relation(fields: [restaurantId], references: [id])
+  options    ModifierOption[]
+  products   ProductModifierGroup[]
+
+  @@index([restaurantId])
+}
+
+model ModifierOption {
+  id              String  @id @default(uuid(7)) @db.Uuid
+  modifierGroupId String  @db.Uuid
+  name            String
+  priceMinor      Int     @default(0)
+  isActive        Boolean @default(true)
+  sortOrder       Int     @default(0)
+
+  group ModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+
+  @@index([modifierGroupId])
+}
+
+model ProductModifierGroup {
+  productId       String @db.Uuid
+  modifierGroupId String @db.Uuid
+  sortOrder       Int    @default(0)
+
+  product Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  group   ModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+
+  @@id([productId, modifierGroupId])
+}
+
+model OutletProductSetting {
+  outletId    String  @db.Uuid
+  productId   String  @db.Uuid
+  isAvailable Boolean @default(true)
+
+  outlet  Outlet  @relation(fields: [outletId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@id([outletId, productId])
+}
+
+model OutletVariantPrice {
+  outletId   String @db.Uuid
+  variantId  String @db.Uuid
+  priceMinor Int
+
+  outlet  Outlet         @relation(fields: [outletId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@id([outletId, variantId])
+}
+
+// ───────────────────────────── Floor ─────────────────────────────
+
+model DiningArea {
+  id           String  @id @default(uuid(7)) @db.Uuid
+  restaurantId String  @db.Uuid
+  outletId     String  @db.Uuid
+  name         String
+  sortOrder    Int     @default(0)
+  isActive     Boolean @default(true)
+
+  outlet Outlet            @relation(fields: [outletId], references: [id])
+  tables RestaurantTable[]
+
+  @@unique([outletId, name])
+}
+
+model RestaurantTable {
+  id               String  @id @default(uuid(7)) @db.Uuid
+  restaurantId     String  @db.Uuid
+  outletId         String  @db.Uuid
+  areaId           String  @db.Uuid
+  name             String
+  capacity         Int     @default(4)
+  posX             Int     @default(0)
+  posY             Int     @default(0)
+  shape            String  @default("square")
+  assignedWaiterId String? @db.Uuid
+  isActive         Boolean @default(true)
+
+  outlet       Outlet        @relation(fields: [outletId], references: [id])
+  area         DiningArea    @relation(fields: [areaId], references: [id])
+  orderTables  OrderTable[]
+  reservations Reservation[]
+
+  @@unique([outletId, name])
+  @@index([areaId])
+}
+
+enum ReservationStatus {
+  BOOKED
+  SEATED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+model Reservation {
+  id           String            @id @default(uuid(7)) @db.Uuid
+  restaurantId String            @db.Uuid
+  outletId     String            @db.Uuid
+  tableId      String            @db.Uuid
+  guestName    String
+  guestPhone   String            @default("")
+  partySize    Int               @default(2)
+  startsAt     DateTime          @db.Timestamptz(3)
+  endsAt       DateTime          @db.Timestamptz(3)
+  status       ReservationStatus @default(BOOKED)
+  note         String            @default("")
+  createdById  String            @db.Uuid
+  createdAt    DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime          @updatedAt @db.Timestamptz(3)
+
+  outlet Outlet          @relation(fields: [outletId], references: [id])
+  table  RestaurantTable @relation(fields: [tableId], references: [id])
+
+  @@index([outletId, startsAt])
+  @@index([tableId, status])
+}
+
+// ───────────────────────────── Orders ─────────────────────────────
+
+enum OrderType {
+  DINE_IN
+  TAKEAWAY
+  PICKUP
+  DELIVERY
+}
+
+enum OrderStatus {
+  DRAFT
+  PLACED
+  CONFIRMED
+  PREPARING
+  READY
+  COMPLETED
+  CANCELLED
+  REFUNDED
+}
+
+enum OrderPaymentStatus {
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+  PARTIALLY_REFUNDED
+  REFUNDED
+}
+
+enum OrderSource {
+  POS
+  POS_OFFLINE // captured while the POS was offline and synchronised later
+}
+
+model Order {
+  id           String      @id @default(uuid(7)) @db.Uuid
+  restaurantId String      @db.Uuid
+  outletId     String      @db.Uuid
+  orderNumber  String
+  type         OrderType
+  status       OrderStatus @default(DRAFT)
+  source       OrderSource @default(POS)
+  isHeld       Boolean     @default(false)
+  currency     String      @db.Char(3)
+
+  customerId       String? @db.Uuid
+  tableLabel       String  @default("") // snapshot of table name(s) for receipts
+  guestCount       Int     @default(1)
+  notes            String  @default("")
+  deliveryName     String  @default("")
+  deliveryPhone    String  @default("")
+  deliveryAddress  String  @default("")
+  splitFromOrderId String? @db.Uuid
+
+  // Rule snapshots taken when the order was last priced
+  pricesIncludeTax   Boolean       @default(false)
+  interState         Boolean       @default(false)
+  serviceChargeBps   Int           @default(0)
+  discountId         String?       @db.Uuid
+  discountCode       String?
+  orderDiscountType  DiscountType?
+  orderDiscountValue Int           @default(0)
+  discountReason     String        @default("")
+  discountById       String?       @db.Uuid
+
+  // Authoritative totals, always calculated by the server
+  subtotalMinor       Int @default(0) // sum of line amounts at list price
+  itemDiscountMinor   Int @default(0)
+  orderDiscountMinor  Int @default(0)
+  serviceChargeMinor  Int @default(0)
+  deliveryChargeMinor Int @default(0)
+  taxableMinor        Int @default(0)
+  taxMinor            Int @default(0)
+  roundOffMinor       Int @default(0)
+  totalMinor          Int @default(0)
+  paidMinor           Int @default(0)
+  refundedMinor       Int @default(0)
+  paymentStatus       OrderPaymentStatus @default(UNPAID)
+
+  idempotencyKey      String?
+  clientCreatedAt     DateTime? @db.Timestamptz(3)
+  createdById         String    @db.Uuid
+  waiterId            String?   @db.Uuid
+  placedAt            DateTime? @db.Timestamptz(3)
+  completedAt         DateTime? @db.Timestamptz(3)
+  cancelledAt         DateTime? @db.Timestamptz(3)
+  cancelledById       String?   @db.Uuid
+  cancelReason        String    @default("")
+  inventoryDeductedAt DateTime? @db.Timestamptz(3) // guards against double stock deduction
+  loyaltyAccruedAt    DateTime? @db.Timestamptz(3)
+  version             Int       @default(1)
+  createdAt           DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime  @updatedAt @db.Timestamptz(3)
+
+  restaurant Restaurant      @relation(fields: [restaurantId], references: [id])
+  outlet     Outlet          @relation(fields: [outletId], references: [id])
+  customer   Customer?       @relation(fields: [customerId], references: [id])
+  discount   Discount?       @relation(fields: [discountId], references: [id])
+  items      OrderItem[]
+  taxLines   OrderTaxLine[]
+  events     OrderEvent[]
+  tables     OrderTable[]
+  tickets    KitchenTicket[]
+  payments   Payment[]
+  refunds    Refund[]
+  invoice    Invoice?
+
+  @@unique([outletId, orderNumber])
+  @@unique([restaurantId, idempotencyKey])
+  @@index([restaurantId, outletId, status])
+  @@index([outletId, createdAt])
+  @@index([outletId, completedAt])
+  @@index([customerId])
+}
+
+enum OrderItemStatus {
+  ACTIVE
+  VOIDED
+}
+
+model OrderItem {
+  id          String  @id @default(uuid(7)) @db.Uuid
+  orderId     String  @db.Uuid
+  productId   String  @db.Uuid
+  variantId   String  @db.Uuid
+  clientLineId String? // lets a retried "add items" request be recognised
+
+  // Snapshots: later menu edits must never change a past receipt
+  productName   String
+  variantName   String
+  sku           String
+  categoryName  String  @default("")
+  taxCategoryName String @default("")
+  hsnSac        String  @default("")
+  stationKey    String?
+
+  quantity            Int
+  unitPriceMinor      Int // variant price at the time of sale
+  modifiersMinor      Int           @default(0) // per-unit total of selected modifiers
+  discountType        DiscountType?
+  discountValue       Int           @default(0)
+  discountReason      String        @default("")
+  notes               String        @default("")
+
+  lineSubtotalMinor       Int // (unitPrice + modifiers) * quantity
+  discountMinor           Int  @default(0)
+  orderDiscountShareMinor Int  @default(0)
+  taxableMinor            Int  @default(0)
+  taxMinor                Int  @default(0)
+  totalMinor              Int  @default(0)
+  taxBreakdown            Json @default("[]")
+
+  status       OrderItemStatus @default(ACTIVE)
+  voidReason   String          @default("")
+  voidedById   String?         @db.Uuid
+  voidedAt     DateTime?       @db.Timestamptz(3)
+  sentToKitchenAt DateTime?    @db.Timestamptz(3)
+  addedById    String          @db.Uuid
+  createdAt    DateTime        @default(now()) @db.Timestamptz(3)
+
+  order       Order               @relation(fields: [orderId], references: [id])
+  modifiers   OrderItemModifier[]
+  ticketItems KitchenTicketItem[]
+
+  @@unique([orderId, clientLineId])
+  @@index([orderId])
+  @@index([productId])
+}
+
+model OrderItemModifier {
+  id               String @id @default(uuid(7)) @db.Uuid
+  orderItemId      String @db.Uuid
+  modifierOptionId String @db.Uuid
+  groupName        String
+  optionName       String
+  priceMinor       Int
+
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  @@index([orderItemId])
+}
+
+model OrderTaxLine {
+  id           String       @id @default(uuid(7)) @db.Uuid
+  orderId      String       @db.Uuid
+  component    TaxComponent
+  name         String
+  rateBps      Int
+  taxableMinor Int
+  amountMinor  Int
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+/// Append-only history of everything that happened to an order.
+model OrderEvent {
+  id         String       @id @default(uuid(7)) @db.Uuid
+  orderId    String       @db.Uuid
+  type       String // CREATED, STATUS_CHANGED, ITEMS_ADDED, ITEM_VOIDED, DISCOUNT, PAYMENT, REFUND, TABLE ...
+  fromStatus OrderStatus?
+  toStatus   OrderStatus?
+  actorId    String?      @db.Uuid
+  actorName  String       @default("")
+  message    String       @default("")
+  data       Json         @default("{}")
+  createdAt  DateTime     @default(now()) @db.Timestamptz(3)
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@index([orderId, createdAt])
+}
+
+/// Links an order to the table(s) it occupies. A partial unique index (see migration)
+/// guarantees a table can belong to only one active order at a time.
+model OrderTable {
+  id       String  @id @default(uuid(7)) @db.Uuid
+  orderId  String  @db.Uuid
+  tableId  String  @db.Uuid
+  isActive Boolean @default(true)
+
+  order Order           @relation(fields: [orderId], references: [id])
+  table RestaurantTable @relation(fields: [tableId], references: [id])
+
+  @@index([orderId])
+  @@index([tableId, isActive])
+}
+
+// ───────────────────────────── Kitchen ─────────────────────────────
+
+model KitchenStation {
+  id           String  @id @default(uuid(7)) @db.Uuid
+  restaurantId String  @db.Uuid
+  outletId     String  @db.Uuid
+  key          String // stable routing key, e.g. "HOT", "GRILL", "BEVERAGE"
+  name         String
+  isDefault    Boolean @default(false) // receives items that have no station
+  isActive     Boolean @default(true)
+  sortOrder    Int     @default(0)
+
+  outlet  Outlet          @relation(fields: [outletId], references: [id])
+  tickets KitchenTicket[]
+
+  @@unique([outletId, key])
+}
+
+enum KitchenTicketStatus {
+  PENDING
+  PREPARING
+  READY
+  CANCELLED
+}
+
+model KitchenTicket {
+  id           String              @id @default(uuid(7)) @db.Uuid
+  restaurantId String              @db.Uuid
+  outletId     String              @db.Uuid
+  orderId      String              @db.Uuid
+  stationId    String              @db.Uuid
+  ticketNumber String
+  status       KitchenTicketStatus @default(PENDING)
+  orderType    OrderType
+  orderNumber  String
+  tableLabel   String              @default("")
+  notes        String              @default("")
+  firedAt      DateTime            @default(now()) @db.Timestamptz(3)
+  startedAt    DateTime?           @db.Timestamptz(3)
+  readyAt      DateTime?           @db.Timestamptz(3)
+  updatedAt    DateTime            @updatedAt @db.Timestamptz(3)
+
+  outlet  Outlet              @relation(fields: [outletId], references: [id])
+  order   Order               @relation(fields: [orderId], references: [id])
+  station KitchenStation      @relation(fields: [stationId], references: [id])
+  items   KitchenTicketItem[]
+
+  @@index([outletId, status, firedAt])
+  @@index([orderId])
+}
+
+model KitchenTicketItem {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  ticketId    String    @db.Uuid
+  orderItemId String    @db.Uuid
+  name        String
+  quantity    Int
+  modifiers   String    @default("")
+  notes       String    @default("")
+  isPrepared  Boolean   @default(false)
+  isCancelled Boolean   @default(false)
+  preparedAt  DateTime? @db.Timestamptz(3)
+
+  ticket    KitchenTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  orderItem OrderItem     @relation(fields: [orderItemId], references: [id])
+
+  @@index([ticketId])
+  @@index([orderItemId])
+}
+
+// ───────────────────────────── Payments & invoices ─────────────────────────────
+
+enum PaymentMethod {
+  CASH
+  UPI
+  CARD
+  WALLET
+  LOYALTY
+  OTHER
+}
+
+enum PaymentState {
+  PENDING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum PaymentVerification {
+  NOT_REQUIRED // cash and loyalty
+  MANUAL // cashier confirmed a payment taken on an external device; not gateway verified
+  GATEWAY // confirmed by a signed provider callback
+}
+
+model Payment {
+  id             String              @id @default(uuid(7)) @db.Uuid
+  restaurantId   String              @db.Uuid
+  outletId       String              @db.Uuid
+  orderId        String              @db.Uuid
+  shiftId        String?             @db.Uuid
+  method         PaymentMethod
+  provider       String // "cash", "manual", "loyalty", "dev", ...
+  state          PaymentState
+  verification   PaymentVerification
+  currency       String              @db.Char(3)
+  amountMinor    Int
+  tenderedMinor  Int?
+  changeMinor    Int                 @default(0)
+  refundedMinor  Int                 @default(0)
+  providerRef    String?
+  reference      String              @default("") // UPI ref / card slip number typed by the cashier
+  failureReason  String              @default("")
+  idempotencyKey String
+  receivedById   String              @db.Uuid
+  createdAt      DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime            @updatedAt @db.Timestamptz(3)
+  succeededAt    DateTime?           @db.Timestamptz(3)
+
+  order   Order      @relation(fields: [orderId], references: [id])
+  shift   CashShift? @relation(fields: [shiftId], references: [id])
+  refunds Refund[]
+
+  @@unique([restaurantId, idempotencyKey])
+  @@unique([provider, providerRef])
+  @@index([orderId])
+  @@index([outletId, succeededAt])
+  @@index([shiftId])
+}
+
+model Refund {
+  id               String   @id @default(uuid(7)) @db.Uuid
+  restaurantId     String   @db.Uuid
+  outletId         String   @db.Uuid
+  orderId          String   @db.Uuid
+  paymentId        String   @db.Uuid
+  shiftId          String?  @db.Uuid
+  amountMinor      Int
+  reason           String
+  creditNoteNumber String
+  idempotencyKey   String
+  createdById      String   @db.Uuid
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+
+  order   Order   @relation(fields: [orderId], references: [id])
+  payment Payment @relation(fields: [paymentId], references: [id])
+
+  @@unique([restaurantId, idempotencyKey])
+  @@unique([outletId, creditNoteNumber])
+  @@index([orderId])
+  @@index([outletId, createdAt])
+}
+
+/// Provider callbacks already processed, so a re-delivered webhook is ignored.
+model PaymentWebhookEvent {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  provider   String
+  eventId    String
+  receivedAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([provider, eventId])
+}
+
+model Invoice {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  restaurantId  String   @db.Uuid
+  outletId      String   @db.Uuid
+  orderId       String   @unique @db.Uuid
+  invoiceNumber String
+  issuedAt      DateTime @default(now()) @db.Timestamptz(3)
+  totalMinor    Int
+  snapshot      Json // immutable copy of seller, buyer, lines and taxes as printed
+
+  outlet Outlet @relation(fields: [outletId], references: [id])
+  order  Order  @relation(fields: [orderId], references: [id])
+
+  @@unique([outletId, invoiceNumber])
+  @@index([restaurantId, issuedAt])
+}
+
+/// Gap-free counters for order, ticket, invoice, credit note and purchase order numbers.
+model DocumentSequence {
+  outletId  String @db.Uuid
+  docType   String // ORDER, KOT, INVOICE, CREDIT_NOTE, PO, GRN
+  period    String // business day (YYYYMMDD) or financial year (2026-27)
+  lastValue Int    @default(0)
+
+  outlet Outlet @relation(fields: [outletId], references: [id], onDelete: Cascade)
+
+  @@id([outletId, docType, period])
+}
+
+// ───────────────────────────── Cash ─────────────────────────────
+
+model CashRegister {
+  id           String  @id @default(uuid(7)) @db.Uuid
+  restaurantId String  @db.Uuid
+  outletId     String  @db.Uuid
+  name         String
+  isActive     Boolean @default(true)
+
+  outlet Outlet      @relation(fields: [outletId], references: [id])
+  shifts CashShift[]
+
+  @@unique([outletId, name])
+}
+
+enum CashShiftStatus {
+  OPEN
+  CLOSED
+}
+
+/// A partial unique index (see migration) allows only one OPEN shift per register.
+model CashShift {
+  id                String          @id @default(uuid(7)) @db.Uuid
+  restaurantId      String          @db.Uuid
+  outletId          String          @db.Uuid
+  registerId        String          @db.Uuid
+  status            CashShiftStatus @default(OPEN)
+  openedById        String          @db.Uuid
+  openedByName      String          @default("")
+  openedAt          DateTime        @default(now()) @db.Timestamptz(3)
+  openingFloatMinor Int
+  closedById        String?         @db.Uuid
+  closedAt          DateTime?       @db.Timestamptz(3)
+  expectedCashMinor Int?
+  countedCashMinor  Int?
+  varianceMinor     Int?
+  varianceApprovedById String?      @db.Uuid
+  closeNote         String          @default("")
+
+  outlet    Outlet         @relation(fields: [outletId], references: [id])
+  register  CashRegister   @relation(fields: [registerId], references: [id])
+  movements CashMovement[]
+  payments  Payment[]
+
+  @@index([outletId, status])
+  @@index([registerId, openedAt])
+}
+
+enum CashMovementType {
+  SALE // cash received for an order
+  REFUND // cash returned for a refund
+  CASH_IN
+  CASH_OUT
+  PETTY_CASH
+}
+
+model CashMovement {
+  id          String           @id @default(uuid(7)) @db.Uuid
+  shiftId     String           @db.Uuid
+  type        CashMovementType
+  amountMinor Int // signed: positive adds to the drawer, negative removes
+  reason      String           @default("")
+  paymentId   String?          @db.Uuid
+  refundId    String?          @db.Uuid
+  createdById String           @db.Uuid
+  createdAt   DateTime         @default(now()) @db.Timestamptz(3)
+
+  shift CashShift @relation(fields: [shiftId], references: [id])
+
+  @@index([shiftId])
+}
+
+// ───────────────────────────── Inventory ─────────────────────────────
+
+enum UnitDimension {
+  MASS
+  VOLUME
+  COUNT
+}
+
+model UnitOfMeasure {
+  id           String        @id @default(uuid(7)) @db.Uuid
+  restaurantId String        @db.Uuid
+  code         String // "g", "kg", "ml", "l", "pc"
+  name         String
+  dimension    UnitDimension
+  toBaseFactor Decimal       @db.Decimal(18, 6) // multiply by this to get the dimension's base unit
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id])
+
+  @@unique([restaurantId, code])
+}
+
+model Ingredient {
+  id                String   @id @default(uuid(7)) @db.Uuid
+  restaurantId      String   @db.Uuid
+  name              String
+  sku               String
+  baseUnitId        String   @db.Uuid // stock is always kept in this unit
+  costPerBaseMinor  Decimal  @default(0) @db.Decimal(18, 6) // weighted average cost per base unit
+  lowStockThreshold Decimal  @default(0) @db.Decimal(18, 4)
+  supplierId        String?  @db.Uuid
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @db.Timestamptz(3)
+
+  restaurant Restaurant         @relation(fields: [restaurantId], references: [id])
+  supplier   Supplier?          @relation(fields: [supplierId], references: [id])
+  balances   InventoryBalance[]
+
+  @@unique([restaurantId, sku])
+}
+
+/// Theoretical stock on hand: the running result of all movements. Physical counts are
+/// recorded separately in StockCount and reconciled through COUNT_CORRECTION movements.
+model InventoryBalance {
+  outletId     String   @db.Uuid
+  ingredientId String   @db.Uuid
+  quantity     Decimal  @default(0) @db.Decimal(18, 4)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  outlet     Outlet     @relation(fields: [outletId], references: [id])
+  ingredient Ingredient @relation(fields: [ingredientId], references: [id])
+
+  @@id([outletId, ingredientId])
+}
+
+enum InventoryMovementType {
+  RECEIPT
+  SALE
+  SALE_REVERSAL
+  WASTAGE
+  ADJUSTMENT
+  TRANSFER_OUT
+  TRANSFER_IN
+  COUNT_CORRECTION
+}
+
+model InventoryMovement {
+  id            String                @id @default(uuid(7)) @db.Uuid
+  restaurantId  String                @db.Uuid
+  outletId      String                @db.Uuid
+  ingredientId  String                @db.Uuid
+  type          InventoryMovementType
+  quantityDelta Decimal               @db.Decimal(18, 4) // signed, in the ingredient's base unit
+  balanceAfter  Decimal               @db.Decimal(18, 4)
+  unitCostMinor Decimal               @default(0) @db.Decimal(18, 6)
+  refType       String                @default("") // ORDER, GRN, TRANSFER, COUNT, MANUAL
+  refId         String                @default("")
+  reason        String                @default("")
+  createdById   String?               @db.Uuid
+  createdAt     DateTime              @default(now()) @db.Timestamptz(3)
+
+  outlet Outlet @relation(fields: [outletId], references: [id])
+
+  @@index([outletId, ingredientId, createdAt])
+  @@index([refType, refId])
+}
+
+model Recipe {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  restaurantId String   @db.Uuid
+  productId    String   @db.Uuid
+  variantId    String?  @db.Uuid // null: applies to every variant without its own recipe
+  version      Int      @default(1)
+  isActive     Boolean  @default(true) // older versions are kept, inactive, as history
+  note         String   @default("")
+  createdById  String   @db.Uuid
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  product     Product            @relation(fields: [productId], references: [id])
+  variant     ProductVariant?    @relation(fields: [variantId], references: [id])
+  ingredients RecipeIngredient[]
+
+  @@index([restaurantId, productId, isActive])
+}
+
+model RecipeIngredient {
+  id           String  @id @default(uuid(7)) @db.Uuid
+  recipeId     String  @db.Uuid
+  ingredientId String  @db.Uuid
+  quantity     Decimal @db.Decimal(18, 4) // as entered, in `unitId`
+  unitId       String  @db.Uuid
+  baseQuantity Decimal @db.Decimal(18, 4) // converted to the ingredient's base unit
+
+  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@index([recipeId])
+}
+
+model Supplier {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  restaurantId String   @db.Uuid
+  name         String
+  contactName  String   @default("")
+  phone        String   @default("")
+  email        String   @default("")
+  gstin        String   @default("")
+  address      String   @default("")
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  restaurant     Restaurant      @relation(fields: [restaurantId], references: [id])
+  ingredients    Ingredient[]
+  purchaseOrders PurchaseOrder[]
+
+  @@unique([restaurantId, name])
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  SENT
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+model PurchaseOrder {
+  id           String              @id @default(uuid(7)) @db.Uuid
+  restaurantId String              @db.Uuid
+  outletId     String              @db.Uuid
+  supplierId   String              @db.Uuid
+  poNumber     String
+  status       PurchaseOrderStatus @default(DRAFT)
+  note         String              @default("")
+  expectedOn   DateTime?           @db.Timestamptz(3)
+  createdById  String              @db.Uuid
+  createdAt    DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime            @updatedAt @db.Timestamptz(3)
+
+  outlet   Outlet              @relation(fields: [outletId], references: [id])
+  supplier Supplier            @relation(fields: [supplierId], references: [id])
+  items    PurchaseOrderItem[]
+  receipts GoodsReceipt[]
+
+  @@unique([outletId, poNumber])
+  @@index([restaurantId, status])
+}
+
+model PurchaseOrderItem {
+  id               String  @id @default(uuid(7)) @db.Uuid
+  purchaseOrderId  String  @db.Uuid
+  ingredientId     String  @db.Uuid
+  unitId           String  @db.Uuid
+  quantity         Decimal @db.Decimal(18, 4) // ordered, in `unitId`
+  unitCostMinor    Int // agreed cost per `unitId`
+  receivedQuantity Decimal @default(0) @db.Decimal(18, 4) // in `unitId`
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  @@index([purchaseOrderId])
+}
+
+model GoodsReceipt {
+  id              String    @id @default(uuid(7)) @db.Uuid
+  restaurantId    String    @db.Uuid
+  outletId        String    @db.Uuid
+  purchaseOrderId String?   @db.Uuid
+  supplierId      String?   @db.Uuid
+  grnNumber       String
+  invoiceNumber   String    @default("") // supplier's invoice reference
+  invoiceDate     DateTime? @db.Timestamptz(3)
+  invoiceTotalMinor Int?
+  note            String    @default("")
+  receivedById    String    @db.Uuid
+  receivedAt      DateTime  @default(now()) @db.Timestamptz(3)
+
+  outlet        Outlet             @relation(fields: [outletId], references: [id])
+  purchaseOrder PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id])
+  items         GoodsReceiptItem[]
+
+  @@unique([outletId, grnNumber])
+}
+
+model GoodsReceiptItem {
+  id                  String  @id @default(uuid(7)) @db.Uuid
+  goodsReceiptId      String  @db.Uuid
+  purchaseOrderItemId String? @db.Uuid
+  ingredientId        String  @db.Uuid
+  unitId              String  @db.Uuid
+  quantity            Decimal @db.Decimal(18, 4)
+  baseQuantity        Decimal @db.Decimal(18, 4)
+  unitCostMinor       Int
+
+  goodsReceipt GoodsReceipt @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
+
+  @@index([goodsReceiptId])
+}
+
+enum StockCountStatus {
+  DRAFT
+  POSTED
+}
+
+model StockCount {
+  id           String           @id @default(uuid(7)) @db.Uuid
+  restaurantId String           @db.Uuid
+  outletId     String           @db.Uuid
+  status       StockCountStatus @default(DRAFT)
+  note         String           @default("")
+  createdById  String           @db.Uuid
+  createdAt    DateTime         @default(now()) @db.Timestamptz(3)
+  postedById   String?          @db.Uuid
+  postedAt     DateTime?        @db.Timestamptz(3)
+
+  outlet Outlet           @relation(fields: [outletId], references: [id])
+  lines  StockCountLine[]
+
+  @@index([outletId, createdAt])
+}
+
+model StockCountLine {
+  id             String  @id @default(uuid(7)) @db.Uuid
+  stockCountId   String  @db.Uuid
+  ingredientId   String  @db.Uuid
+  countedQty     Decimal @db.Decimal(18, 4) // what was physically found
+  theoreticalQty Decimal? @db.Decimal(18, 4) // system stock at the moment of posting
+  varianceQty    Decimal? @db.Decimal(18, 4)
+
+  stockCount StockCount @relation(fields: [stockCountId], references: [id], onDelete: Cascade)
+
+  @@unique([stockCountId, ingredientId])
+}
+
+// ───────────────────────────── Customers & loyalty ─────────────────────────────
+
+model Customer {
+  id               String    @id @default(uuid(7)) @db.Uuid
+  restaurantId     String    @db.Uuid
+  name             String
+  phone            String? // normalised digits; unique per restaurant when present
+  email            String    @default("")
+  gstin            String    @default("")
+  stateCode        String    @default("")
+  notes            String    @default("")
+  marketingSms     Boolean   @default(false)
+  marketingEmail   Boolean   @default(false)
+  marketingWhatsapp Boolean  @default(false)
+  consentUpdatedAt DateTime? @db.Timestamptz(3)
+  loyaltyPoints    Int       @default(0) // cached; the ledger is the source of truth
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @db.Timestamptz(3)
+
+  restaurant Restaurant           @relation(fields: [restaurantId], references: [id])
+  orders     Order[]
+  ledger     LoyaltyLedgerEntry[]
+
+  @@unique([restaurantId, phone])
+  @@index([restaurantId, name])
+}
+
+enum LoyaltyEntryType {
+  EARN
+  REDEEM
+  REVERSAL
+  ADJUSTMENT
+}
+
+model LoyaltyLedgerEntry {
+  id           String           @id @default(uuid(7)) @db.Uuid
+  restaurantId String           @db.Uuid
+  customerId   String           @db.Uuid
+  type         LoyaltyEntryType
+  points       Int // signed
+  balanceAfter Int
+  orderId      String?          @db.Uuid
+  dedupeKey    String?          @unique // e.g. "earn:<orderId>" so a retried event cannot accrue twice
+  reason       String           @default("")
+  createdById  String?          @db.Uuid
+  createdAt    DateTime         @default(now()) @db.Timestamptz(3)
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([customerId, createdAt])
+}
