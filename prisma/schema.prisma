@@ -51,7 +51,6 @@ model Restaurant {
   deliveryChargeTaxCategoryId String?     @db.Uuid
   roundOffMode               RoundOffMode @default(NEAREST_UNIT)
   receiptFooter              String       @default("")
-  invoicePrefix              String       @default("INV")
 
   // Controls
   discountApprovalThresholdBps      Int             @default(1500)
@@ -102,6 +101,7 @@ model Outlet {
 
   serviceChargeEnabled Boolean @default(false)
   deliveryChargeMinor  Int     @default(0)
+  qrOrderingEnabled    Boolean @default(false) // guests may order and pay from the table QR code
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -319,6 +319,20 @@ model ShiftSchedule {
   @@index([restaurantId, outletId, startsAt])
 }
 
+/// Uploaded product images. Kept in the database so they survive redeploys on hosts whose
+/// disk is wiped, and are covered by the same backups as everything else.
+model StoredFile {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  restaurantId String   @db.Uuid
+  name         String   @unique // random; this is the public file name
+  contentType  String
+  size         Int
+  data         Bytes
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([restaurantId])
+}
+
 // ───────────────────────────── Tax & discounts ─────────────────────────────
 
 enum TaxComponent {
@@ -403,7 +417,6 @@ model Category {
   name         String
   sortOrder    Int      @default(0)
   isActive     Boolean  @default(true)
-  stationId    String?  @db.Uuid // default kitchen station for products in this category
   createdAt    DateTime @default(now()) @db.Timestamptz(3)
   updatedAt    DateTime @updatedAt @db.Timestamptz(3)
 
@@ -551,6 +564,7 @@ model RestaurantTable {
   shape            String  @default("square")
   assignedWaiterId String? @db.Uuid
   isActive         Boolean @default(true)
+  qrToken          String? @unique // secret in the table's QR link; regenerate to invalidate printed codes
 
   outlet       Outlet        @relation(fields: [outletId], references: [id])
   area         DiningArea    @relation(fields: [areaId], references: [id])
@@ -623,6 +637,7 @@ enum OrderPaymentStatus {
 enum OrderSource {
   POS
   POS_OFFLINE // captured while the POS was offline and synchronised later
+  QR // placed and paid by a guest from the table QR code
 }
 
 model Order {
@@ -644,9 +659,14 @@ model Order {
   deliveryPhone    String  @default("")
   deliveryAddress  String  @default("")
   splitFromOrderId String? @db.Uuid
+  guestTableId     String? @db.Uuid // QR orders: the table the guest ordered from (does not lock the table)
+  guestToken       String? @unique // lets the guest's phone see this one order, nothing else
+  guestName        String  @default("")
 
   // Rule snapshots taken when the order was last priced
   pricesIncludeTax   Boolean       @default(false)
+  roundOffMode       RoundOffMode  @default(NONE)
+  chargeTaxRules     Json          @default("{}") // tax rules applied to service and delivery charges
   interState         Boolean       @default(false)
   serviceChargeBps   Int           @default(0)
   discountId         String?       @db.Uuid
@@ -672,14 +692,13 @@ model Order {
 
   idempotencyKey      String?
   clientCreatedAt     DateTime? @db.Timestamptz(3)
-  createdById         String    @db.Uuid
+  createdById         String?   @db.Uuid // null for orders placed by a guest
   waiterId            String?   @db.Uuid
   placedAt            DateTime? @db.Timestamptz(3)
   completedAt         DateTime? @db.Timestamptz(3)
   cancelledAt         DateTime? @db.Timestamptz(3)
   cancelledById       String?   @db.Uuid
   cancelReason        String    @default("")
-  inventoryDeductedAt DateTime? @db.Timestamptz(3) // guards against double stock deduction
   loyaltyAccruedAt    DateTime? @db.Timestamptz(3)
   version             Int       @default(1)
   createdAt           DateTime  @default(now()) @db.Timestamptz(3)
@@ -704,6 +723,7 @@ model Order {
   @@index([outletId, createdAt])
   @@index([outletId, completedAt])
   @@index([customerId])
+  @@index([guestTableId, status])
 }
 
 enum OrderItemStatus {
@@ -748,7 +768,9 @@ model OrderItem {
   voidedById   String?         @db.Uuid
   voidedAt     DateTime?       @db.Timestamptz(3)
   sentToKitchenAt DateTime?    @db.Timestamptz(3)
-  addedById    String          @db.Uuid
+  stockDeductedAt DateTime?    @db.Timestamptz(3) // guards against deducting stock twice
+  stockReversedAt DateTime?    @db.Timestamptz(3)
+  addedById    String?         @db.Uuid
   createdAt    DateTime        @default(now()) @db.Timestamptz(3)
 
   order       Order               @relation(fields: [orderId], references: [id])
@@ -933,7 +955,7 @@ model Payment {
   reference      String              @default("") // UPI ref / card slip number typed by the cashier
   failureReason  String              @default("")
   idempotencyKey String
-  receivedById   String              @db.Uuid
+  receivedById   String?             @db.Uuid // null when the customer paid online themselves
   createdAt      DateTime            @default(now()) @db.Timestamptz(3)
   updatedAt      DateTime            @updatedAt @db.Timestamptz(3)
   succeededAt    DateTime?           @db.Timestamptz(3)
@@ -1158,7 +1180,8 @@ model InventoryMovement {
   quantityDelta Decimal               @db.Decimal(18, 4) // signed, in the ingredient's base unit
   balanceAfter  Decimal               @db.Decimal(18, 4)
   unitCostMinor Decimal               @default(0) @db.Decimal(18, 6)
-  refType       String                @default("") // ORDER, GRN, TRANSFER, COUNT, MANUAL
+  refType       String                @default("") // ORDER_ITEM, GRN, TRANSFER, COUNT, MANUAL
+  orderId       String?               @db.Uuid
   refId         String                @default("")
   reason        String                @default("")
   createdById   String?               @db.Uuid

@@ -1,0 +1,49 @@
+@import 'tailwindcss';
+@import '../../../packages/config/tokens.css';
+
+/*
+ * Kitchen display theme: a dark, high-contrast variant built on the shared sidebar/ink tokens.
+ * Status colours are the bright counterparts of the shared ok/warn/bad tokens, because the
+ * shared ones are tuned for white backgrounds and are too dim on a dark monitor.
+ */
+@theme {
+  --color-kds-bg: #151210;
+  --color-kds-card: var(--color-sidebar);
+  --color-kds-raised: var(--color-sidebar-raised);
+  --color-kds-line: #4d453e;
+  --color-kds-ink: #f8f4ee;
+  --color-kds-soft: var(--color-sidebar-ink);
+  --color-kds-faint: #b9b0a5;
+  --color-kds-ok: #4ade80;
+  --color-kds-warn: #fbbf24;
+  --color-kds-bad: #f87171;
+  --color-kds-info: #7dd3fc;
+
+  /* A finite pulse: the "NEW" badge stays after it ends, so nothing depends on motion. */
+  --animate-kds-flash: kds-flash 1s ease-in-out 10;
+  @keyframes kds-flash {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 transparent;
+    }
+    50% {
+      box-shadow: 0 0 0 8px var(--color-kds-info);
+    }
+  }
+}
+
+@layer base {
+  html {
+    color: var(--color-kds-ink);
+    background: var(--color-kds-bg);
+    /* Everything is sized in rem; a larger root makes the board readable from across a kitchen. */
+    font-size: 18px;
+  }
+  :focus-visible {
+    outline: 3px solid var(--color-brand-bright);
+    outline-offset: 3px;
+  }
+  button:disabled {
+    opacity: 0.45;
+  }
+}

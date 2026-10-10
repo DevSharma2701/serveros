@@ -21,6 +21,21 @@ const positiveQty = qtyString.refine((v) => Number(v) > 0, 'Quantity must be mor
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
 const bool = z.union([z.boolean(), z.enum(['true', 'false']).transform((v) => v === 'true')]);
 
+type PatchShape<S extends z.ZodRawShape> = { [K in keyof S]: z.ZodOptional<S[K] extends z.ZodDefault<infer Inner> ? Inner : S[K]> };
+
+/**
+ * Builds the schema for a partial update: every field becomes optional and loses its default.
+ * (A plain `.partial()` keeps defaults, so an omitted field would be reset to its default.)
+ */
+function patchOf<S extends z.ZodRawShape>(schema: z.ZodObject<S>): z.ZodObject<PatchShape<S>> {
+  const shape: Record<string, z.ZodType> = {};
+  for (const [key, field] of Object.entries(schema.shape)) {
+    const inner = field instanceof z.ZodDefault ? (field.unwrap() as z.ZodType) : (field as z.ZodType);
+    shape[key] = inner.optional();
+  }
+  return z.object(shape) as unknown as z.ZodObject<PatchShape<S>>;
+}
+
 export const pageQuery = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(200).default(50),
@@ -61,7 +76,6 @@ export const updateRestaurantSchema = z
     deliveryChargeTaxCategoryId: id.nullable(),
     roundOffMode: z.enum(['NONE', 'NEAREST_UNIT']),
     receiptFooter: text(500),
-    invoicePrefix: z.string().trim().regex(/^[A-Z0-9]{1,8}$/, 'Use 1-8 capital letters or digits'),
     discountApprovalThresholdBps: bps,
     cashVarianceApprovalThresholdMinor: money,
     allowPartialPayment: z.boolean(),
@@ -76,7 +90,7 @@ export const updateRestaurantSchema = z
 
 export const outletSchema = z.object({
   name,
-  code: z.string().trim().regex(/^[A-Z0-9]{2,8}$/, 'Use 2-8 capital letters or digits'),
+  code: z.string().trim().regex(/^[A-Z0-9]{2,5}$/, 'Use 2-5 capital letters or digits'),
   addressLine1: text().default(''),
   city: text(80).default(''),
   stateCode: text(4).default(''),
@@ -87,9 +101,10 @@ export const outletSchema = z.object({
   timezone: text(60).default('Asia/Kolkata'),
   serviceChargeEnabled: z.boolean().default(false),
   deliveryChargeMinor: money.default(0),
+  qrOrderingEnabled: z.boolean().default(false),
   isActive: z.boolean().default(true),
 });
-export const updateOutletSchema = outletSchema.partial();
+export const updateOutletSchema = patchOf(outletSchema);
 
 export const createRestaurantSchema = z.object({
   name,
@@ -154,7 +169,8 @@ export const productSchema = z.object({
   variants: z.array(variantSchema).min(1, 'Add at least one variant').max(20),
   modifierGroupIds: z.array(id).max(20).default([]),
 });
-export const updateProductSchema = productSchema.partial();
+export const updateProductSchema = patchOf(productSchema);
+export const updateCategorySchema = patchOf(categorySchema);
 export const productAvailabilitySchema = z.object({
   isAvailable: z.boolean(),
   variantPrices: z.array(z.object({ variantId: id, priceMinor: money.nullable() })).max(20).optional(),
@@ -198,10 +214,12 @@ export const discountSchema = z.object({
   validTo: z.iso.datetime().nullable().default(null),
   isActive: z.boolean().default(true),
 });
+export const updateDiscountSchema = patchOf(discountSchema);
 export const productQuery = pageQuery.extend({ q: text(80).optional(), categoryId: id.optional(), active: bool.optional() });
 
 // ── Floor ──
 export const diningAreaSchema = z.object({ name, sortOrder: z.number().int().min(0).default(0), isActive: z.boolean().default(true) });
+export const updateDiningAreaSchema = patchOf(diningAreaSchema);
 export const tableSchema = z.object({
   name: text(20).min(1),
   areaId: id,
@@ -212,6 +230,7 @@ export const tableSchema = z.object({
   assignedWaiterId: id.nullable().default(null),
   isActive: z.boolean().default(true),
 });
+export const updateTableSchema = patchOf(tableSchema);
 export const reservationSchema = z.object({
   tableId: id,
   guestName: name,
@@ -287,8 +306,30 @@ export const orderQuery = pageQuery.extend({
 });
 export const orderStatusList = z.array(z.enum(ORDER_STATUSES));
 
+// ── Guest (QR) ordering: public, unauthenticated ──
+/** Deliberately narrow: no discounts, no customer record, small quantities. */
+export const guestOrderSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        clientLineId: z.string().min(1).max(60),
+        productId: id,
+        variantId: id,
+        quantity: z.number().int().min(1).max(20),
+        modifierOptionIds: z.array(id).max(20).default([]),
+        notes: text(120).default(''),
+      }),
+    )
+    .min(1)
+    .max(30),
+  guestName: text(60).default(''),
+  notes: text(200).default(''),
+});
+export const guestPaySchema = z.object({ method: z.enum(['UPI', 'CARD']).default('UPI') });
+export type GuestOrderInput = z.input<typeof guestOrderSchema>;
+
 // ── Payments ──
-export const recordPaymentSchema = z.object({
+export const tenderSchema = z.object({
   method: z.enum(PAYMENT_METHODS),
   amountMinor: money.min(1),
   /** Cash handed over; change is calculated by the server. */
@@ -297,6 +338,8 @@ export const recordPaymentSchema = z.object({
   mode: z.enum(['MANUAL', 'GATEWAY']).default('MANUAL'),
   reference: text(80).default(''),
 });
+/** One or more tenders settled together; this is how split payments are recorded atomically. */
+export const recordPaymentSchema = z.object({ tenders: z.array(tenderSchema).min(1).max(6) });
 export const refundSchema = z.object({ amountMinor: money.min(1), reason });
 export const devSimulateSchema = z.object({ outcome: z.enum(['success', 'failure']) });
 
@@ -312,8 +355,11 @@ export const stationSchema = z.object({
   sortOrder: z.number().int().min(0).default(0),
 });
 
+export const updateStationSchema = patchOf(stationSchema);
+
 // ── Cash ──
 export const registerSchema = z.object({ name, isActive: z.boolean().default(true) });
+export const updateRegisterSchema = patchOf(registerSchema);
 export const openShiftSchema = z.object({ registerId: id, openingFloatMinor: money });
 export const cashMovementSchema = z.object({ type: z.enum(['CASH_IN', 'CASH_OUT', 'PETTY_CASH']), amountMinor: money.min(1), reason });
 export const closeShiftSchema = z.object({ countedCashMinor: money, note: text(300).default('') });
@@ -327,7 +373,7 @@ export const ingredientSchema = z.object({
   supplierId: id.nullable().default(null),
   isActive: z.boolean().default(true),
 });
-export const updateIngredientSchema = ingredientSchema.omit({ baseUnitId: true }).partial();
+export const updateIngredientSchema = patchOf(ingredientSchema.omit({ baseUnitId: true }));
 export const stockAdjustmentSchema = z.object({
   ingredientId: id,
   type: z.enum(['WASTAGE', 'ADJUSTMENT']),
@@ -358,6 +404,7 @@ export const supplierSchema = z.object({
   address: text(400).default(''),
   isActive: z.boolean().default(true),
 });
+export const updateSupplierSchema = patchOf(supplierSchema);
 const purchaseLine = stockLine.extend({ unitCostMinor: money });
 export const purchaseOrderSchema = z.object({
   supplierId: id,
@@ -382,8 +429,9 @@ export const customerSchema = z.object({
   phone: z
     .string()
     .trim()
+    // Validate what was typed (digits with common separators), then store digits only.
+    .refine((v) => v === '' || (/^\+?[\d\s().-]+$/.test(v) && /^\d{7,15}$/.test(v.replace(/\D/g, ''))), 'Enter a valid phone number')
     .transform((v) => v.replace(/[^\d+]/g, ''))
-    .refine((v) => v === '' || /^\+?\d{7,15}$/.test(v), 'Enter a valid phone number')
     .default(''),
   email: z.union([z.email(), z.literal('')]).default(''),
   gstin: text(20).default(''),
@@ -393,7 +441,7 @@ export const customerSchema = z.object({
   marketingEmail: z.boolean().default(false),
   marketingWhatsapp: z.boolean().default(false),
 });
-export const updateCustomerSchema = customerSchema.partial();
+export const updateCustomerSchema = patchOf(customerSchema);
 export const customerQuery = pageQuery.extend({ q: text(60).optional() });
 export const loyaltyAdjustSchema = z.object({ points: z.number().int().min(-1_000_000).max(1_000_000).refine((v) => v !== 0), reason });
 

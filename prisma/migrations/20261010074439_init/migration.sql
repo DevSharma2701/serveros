@@ -89,7 +89,6 @@ CREATE TABLE "Restaurant" (
     "deliveryChargeTaxCategoryId" UUID,
     "roundOffMode" "RoundOffMode" NOT NULL DEFAULT 'NEAREST_UNIT',
     "receiptFooter" TEXT NOT NULL DEFAULT '',
-    "invoicePrefix" TEXT NOT NULL DEFAULT 'INV',
     "discountApprovalThresholdBps" INTEGER NOT NULL DEFAULT 1500,
     "cashVarianceApprovalThresholdMinor" INTEGER NOT NULL DEFAULT 50000,
     "allowPartialPayment" BOOLEAN NOT NULL DEFAULT false,
@@ -329,7 +328,6 @@ CREATE TABLE "Category" (
     "name" TEXT NOT NULL,
     "sortOrder" INTEGER NOT NULL DEFAULT 0,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
-    "stationId" UUID,
     "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMPTZ(3) NOT NULL,
 
@@ -492,6 +490,8 @@ CREATE TABLE "Order" (
     "deliveryAddress" TEXT NOT NULL DEFAULT '',
     "splitFromOrderId" UUID,
     "pricesIncludeTax" BOOLEAN NOT NULL DEFAULT false,
+    "roundOffMode" "RoundOffMode" NOT NULL DEFAULT 'NONE',
+    "chargeTaxRules" JSONB NOT NULL DEFAULT '{}',
     "interState" BOOLEAN NOT NULL DEFAULT false,
     "serviceChargeBps" INTEGER NOT NULL DEFAULT 0,
     "discountId" UUID,
@@ -521,7 +521,6 @@ CREATE TABLE "Order" (
     "cancelledAt" TIMESTAMPTZ(3),
     "cancelledById" UUID,
     "cancelReason" TEXT NOT NULL DEFAULT '',
-    "inventoryDeductedAt" TIMESTAMPTZ(3),
     "loyaltyAccruedAt" TIMESTAMPTZ(3),
     "version" INTEGER NOT NULL DEFAULT 1,
     "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -563,6 +562,8 @@ CREATE TABLE "OrderItem" (
     "voidedById" UUID,
     "voidedAt" TIMESTAMPTZ(3),
     "sentToKitchenAt" TIMESTAMPTZ(3),
+    "stockDeductedAt" TIMESTAMPTZ(3),
+    "stockReversedAt" TIMESTAMPTZ(3),
     "addedById" UUID NOT NULL,
     "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -849,6 +850,7 @@ CREATE TABLE "InventoryMovement" (
     "balanceAfter" DECIMAL(18,4) NOT NULL,
     "unitCostMinor" DECIMAL(18,6) NOT NULL DEFAULT 0,
     "refType" TEXT NOT NULL DEFAULT '',
+    "orderId" UUID,
     "refId" TEXT NOT NULL DEFAULT '',
     "reason" TEXT NOT NULL DEFAULT '',
     "createdById" UUID,
@@ -1542,6 +1544,7 @@ ALTER TABLE "Customer" ADD CONSTRAINT "Customer_restaurantId_fkey" FOREIGN KEY (
 ALTER TABLE "LoyaltyLedgerEntry" ADD CONSTRAINT "LoyaltyLedgerEntry_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "Customer"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- ───────────── Hand-written integrity rules (not expressible in schema.prisma) ─────────────
+-- This block is appended to the initial migration. Keep it in sync if the migration is recreated.
 
 -- A table can be held by only one active order at a time.
 CREATE UNIQUE INDEX "OrderTable_one_active_order_per_table" ON "OrderTable" ("tableId") WHERE "isActive";
@@ -1552,8 +1555,8 @@ CREATE UNIQUE INDEX "CashShift_one_open_per_register" ON "CashShift" ("registerI
 -- A product may have only one active recipe per variant (NULL variant = product default).
 CREATE UNIQUE INDEX "Recipe_one_active_per_variant" ON "Recipe" ("productId", COALESCE("variantId", '00000000-0000-0000-0000-000000000000'::uuid)) WHERE "isActive";
 
--- Stock consumed by an order can be posted (and reversed) only once per ingredient.
-CREATE UNIQUE INDEX "InventoryMovement_once_per_order" ON "InventoryMovement" ("refId", "ingredientId", "type") WHERE "refType" = 'ORDER';
+-- Stock consumed by an order line can be posted (and reversed) only once per ingredient.
+CREATE UNIQUE INDEX "InventoryMovement_once_per_order_item" ON "InventoryMovement" ("refId", "ingredientId", "type") WHERE "refType" = 'ORDER_ITEM';
 
 -- Built-in roles (no restaurant) must have unique keys; NULLs are otherwise not compared.
 CREATE UNIQUE INDEX "Role_system_key" ON "Role" ("key") WHERE "restaurantId" IS NULL;

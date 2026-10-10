@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "ServeOS Manager",
+    "slug": "serveos-manager",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "serveos",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#faf8f5",
+    "ios": {
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "com.serveos.manager",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.serveos.manager",
+      "adaptiveIcon": {
+        "backgroundColor": "#211e1b",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundImage": "./assets/images/android-icon-background.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#211e1b",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 76
+        }
+      ],
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}

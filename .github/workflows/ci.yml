@@ -1,0 +1,67 @@
+# Runs on every push and pull request: type-checks, tests against a real PostgreSQL, and builds.
+# Written but not yet run: it will run for the first time when this repository is pushed to GitHub.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-and-web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: serveos
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: serveos_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U serveos" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # Throwaway values for the test run only. Real secrets are never stored in this file.
+      DATABASE_URL: postgresql://serveos:ci-only-password@localhost:5432/serveos_ci?schema=public
+      DIRECT_URL: postgresql://serveos:ci-only-password@localhost:5432/serveos_ci?schema=public
+      TEST_DATABASE_URL: postgresql://serveos:ci-only-password@localhost:5432/serveos_test?schema=public
+      JWT_ACCESS_SECRET: ci-access-secret-ci-access-secret-ci-access-secret
+      JWT_REFRESH_SECRET: ci-refresh-secret-ci-refresh-secret-ci-refresh-secret
+      PAYMENT_PROVIDER: dev
+      PAYMENT_WEBHOOK_SECRET: ci-webhook-secret-ci-webhook-secret-ci-webhook
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:shared
+      - run: pnpm exec prisma generate
+      - name: Type-check
+        run: pnpm --filter @serveos/shared --filter @serveos/api --filter @serveos/web --filter @serveos/kds typecheck
+      - name: Tests (shared, API, web, kitchen display)
+        run: pnpm --filter @serveos/shared --filter @serveos/api --filter @serveos/web --filter @serveos/kds test
+      - name: Production builds
+        run: pnpm --filter @serveos/api --filter @serveos/web --filter @serveos/kds build
+
+  mobile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:shared
+      - run: pnpm --filter @serveos/mobile typecheck
+      - run: pnpm --filter @serveos/mobile test

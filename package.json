@@ -11,10 +11,10 @@
     "db:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/db-start.ps1",
     "db:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/db-stop.ps1",
     "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
+    "db:migrate": "node scripts/guard-local-db.mjs db:migrate && prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
-    "db:seed": "tsx prisma/seed.ts",
-    "db:reset": "prisma migrate reset --force",
+    "db:seed": "node scripts/guard-local-db.mjs db:seed && tsx prisma/seed.ts",
+    "db:reset": "node scripts/guard-local-db.mjs db:reset && prisma migrate reset --force",
     "db:studio": "prisma studio",
     "build:shared": "pnpm --filter @serveos/shared build",
     "dev:api": "pnpm --filter @serveos/api dev",
@@ -23,17 +23,22 @@
     "dev:mobile": "pnpm --filter @serveos/mobile start",
     "build": "pnpm build:shared && pnpm --filter @serveos/api --filter @serveos/web --filter @serveos/kds build",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "db:seed:orders": "node scripts/guard-local-db.mjs db:seed:orders && pnpm --filter @serveos/api seed:orders",
+    "test:api": "pnpm --filter @serveos/api test",
+    "db:init": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/db-init.ps1",
+    "db:backup": "node scripts/db-backup.mjs",
+    "create-restaurant": "pnpm --filter @serveos/api create-restaurant"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.0.2",
     "@prisma/client": "6.19.3",
-    "@serveos/shared": "workspace:*"
+    "@serveos/shared": "workspace:*",
+    "prisma": "6.19.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "dotenv": "^16.4.7",
-    "prisma": "6.19.3",
     "tsx": "^4.19.2",
     "typescript": "~5.9.3"
   }
