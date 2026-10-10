@@ -45,7 +45,7 @@ You will create three addresses on it (examples):
 | Address | For |
 |---|---|
 | `app.serveros.me` | Web app and the guest QR page |
-| `kitchen.serveros.me` | Kitchen display |
+| `app.serveros.me/kitchen/` | Kitchen display |
 | `api.serveros.me` | API |
 
 They must all be on the same domain, or sign-in will not stick.
@@ -57,7 +57,7 @@ API, and their public addresses are set there:
 | Variable | Web app (`serveos-web`) | Kitchen display (`serveos-kitchen`) |
 |---|---|---|
 | `VITE_API_URL` | `https://api.serveros.me` | `https://api.serveros.me` |
-| `VITE_KDS_URL` | `https://kitchen.serveros.me` | — |
+| `VITE_KDS_URL` | `https://app.serveros.me/kitchen/` | — |
 
 These are public addresses, not secrets. Each site needs one CNAME record at Namecheap pointing
 its subdomain at the site's `.onrender.com` address.
@@ -83,7 +83,7 @@ its subdomain at the site's `.onrender.com` address.
 |---|---|
 | `WEB_URL` | `https://app.serveros.me` |
 | `API_URL` | `https://api.serveros.me` |
-| `CORS_ORIGINS` | `https://app.serveros.me,https://kitchen.serveros.me` |
+| `CORS_ORIGINS` | `https://app.serveros.me` |
 
 Already set by the blueprint: `NODE_ENV=production`, `STORAGE_PROVIDER=database`.
 

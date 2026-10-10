@@ -24,7 +24,9 @@ export default defineConfig({
         start_url: '/',
         icons: [{ src: 'icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' }],
       },
-      workbox: { navigateFallback: '/index.html', globPatterns: ['**/*.{js,css,html,svg,woff2}'] },
+      // /kitchen/ is a separate app (the kitchen display) living under the same address: the
+      // POS's offline shell must not answer for it.
+      workbox: { navigateFallback: '/index.html', navigateFallbackDenylist: [/^\/kitchen(\/|$)/], globPatterns: ['**/*.{js,css,html,svg,woff2}'] },
     }),
   ],
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },

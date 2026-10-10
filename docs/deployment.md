@@ -10,7 +10,7 @@ you meet each provider's current screens and limits.
 | Piece | Service | Cost | Address (example) |
 |---|---|---|---|
 | Web app + guest QR page | Render static site | Free | `app.serveros.me` |
-| Kitchen display | Render static site | Free | `kitchen.serveros.me` |
+| Kitchen display | Render static site | Free | `app.serveros.me/kitchen/` |
 | API | Render web service, smallest **paid** instance | A few dollars a month | `api.serveros.me` |
 | Database | Neon PostgreSQL | Free tier to start | — |
 | Email | Resend, from your domain | Free tier to start | `no-reply@serveros.me` |
@@ -57,7 +57,7 @@ environment settings (or your local `.env`, which git ignores).
   | `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` | two different random strings, 48+ bytes each |
   | `WEB_URL` | `https://app.serveros.me` |
   | `API_URL` | `https://api.serveros.me` |
-  | `CORS_ORIGINS` | `https://app.serveros.me,https://kitchen.serveros.me` |
+  | `CORS_ORIGINS` | `https://app.serveros.me` |
   | `EMAIL_PROVIDER` / `EMAIL_API_KEY` / `EMAIL_FROM` | `resend` / key from Resend / `Your Restaurant <no-reply@serveros.me>` |
   | `PAYMENT_PROVIDER` | `none` for the pilot, `razorpay` when ready |
   | `PAYMENT_API_KEY` / `PAYMENT_API_SECRET` / `PAYMENT_WEBHOOK_SECRET` | from Razorpay (see step 6) |
@@ -78,17 +78,14 @@ You receive an email with a link to choose your password (or, with no email prov
 link is printed for you). `db:seed`, `db:seed:orders`, `db:reset` and `db:migrate` refuse to
 run against any database that is not on your own computer.
 
-### 4. Web app and kitchen display (Render static sites)
-Both are defined in `render.yaml` (`serveos-web` and `serveos-kitchen`), so Render creates and
-rebuilds them from the same blueprint as the API. Static sites are free and do not sleep.
-For each, add one CNAME record at Namecheap (Advanced DNS):
+### 4. Web app and kitchen display (one Render static site)
+Defined in `render.yaml` as `serveos-web`. One free static site (it does not sleep) serves both:
+the web app at `app.serveros.me` and the kitchen display at `app.serveros.me/kitchen/`.
+They share an address because Render's free workspace appears to allow only two custom domains,
+and the API uses the other. It needs one CNAME record at Namecheap: host `app` →
+`serveos-web.onrender.com`.
 
-| Host | Value |
-|---|---|
-| `app` | the `.onrender.com` address of `serveos-web` |
-| `kitchen` | the `.onrender.com` address of `serveos-kitchen` |
-
-The blueprint sends every unknown path to the app, so page reloads and QR links (`/t/...`) work.
+The blueprint sends unknown paths to the right app, so page reloads and QR links (`/t/...`) work.
 `VITE_` values are public and baked in at build time: never put a secret in one.
 
 ### 5. Set up the restaurant in the back office

@@ -32,7 +32,7 @@ services:
       - key: API_URL
         value: https://api.serveros.me
       - key: CORS_ORIGINS
-        value: https://app.serveros.me,https://kitchen.serveros.me
+        value: https://app.serveros.me
       - key: JWT_ACCESS_SECRET
         generateValue: true
       - key: JWT_REFRESH_SECRET
@@ -46,11 +46,13 @@ services:
     domains:
       - api.serveros.me
 
-  # ── Web app (POS, back office and the guest QR page): static files, free, always on ──
+  # ── Web app (POS, back office, guest QR page) and, under /kitchen/, the kitchen display ──
+  # Both are static files on one free site that never sleeps. The kitchen display shares this
+  # address because the free workspace allows only two custom domains (this one and the API).
   - type: web
     name: serveos-web
     runtime: static
-    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm build:shared && pnpm --filter @serveos/web build
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm build:shared && pnpm --filter @serveos/web build && VITE_BASE=/kitchen/ pnpm --filter @serveos/kds build && cp -r apps/kds/dist apps/web/dist/kitchen
     staticPublishPath: apps/web/dist
     pullRequestPreviewsEnabled: false
     domains:
@@ -62,39 +64,13 @@ services:
       - key: VITE_API_URL
         value: https://api.serveros.me
       - key: VITE_KDS_URL
-        value: https://kitchen.serveros.me
+        value: https://app.serveros.me/kitchen/
     routes:
+      - type: rewrite
+        source: /kitchen/*
+        destination: /kitchen/index.html
       # A single-page app: any address that is not a real file (such as a table's QR link,
       # /t/<code>) must open the app, which then shows the right screen.
-      - type: rewrite
-        source: /*
-        destination: /index.html
-    headers:
-      - path: /*
-        name: X-Content-Type-Options
-        value: nosniff
-      - path: /*
-        name: Referrer-Policy
-        value: strict-origin-when-cross-origin
-      - path: /*
-        name: X-Frame-Options
-        value: DENY
-
-  # ── Kitchen display: static files, free, always on ──
-  - type: web
-    name: serveos-kitchen
-    runtime: static
-    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm build:shared && pnpm --filter @serveos/kds build
-    staticPublishPath: apps/kds/dist
-    pullRequestPreviewsEnabled: false
-    domains:
-      - kitchen.serveros.me
-    envVars:
-      - key: NODE_VERSION
-        value: 22
-      - key: VITE_API_URL
-        value: https://api.serveros.me
-    routes:
       - type: rewrite
         source: /*
         destination: /index.html
