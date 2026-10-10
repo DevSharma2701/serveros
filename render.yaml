@@ -1,13 +1,15 @@
 # Render blueprint for the ServeOS API. In Render: New > Blueprint > pick this repository.
-# Written from Render's documented format but not yet deployed; expect to adjust on first use.
 #
-# Every value marked "sync: false" is a secret or an address you type into Render's dashboard.
-# See docs/credentials.md for what each one is and where to get it.
+# Render asks you for the values marked "sync: false" when you create the service.
+# Email and payment keys are deliberately not listed: add them later in the service's
+# Environment tab (see docs/credentials.md). Until then email is off and guests pay at the counter.
 services:
   - type: web
     name: serveos-api
     runtime: node
-    plan: starter # an always-on instance; the free plan sleeps, which a till cannot tolerate
+    # "free" is fine for a first trial, but it sleeps after 15 idle minutes and takes about a
+    # minute to wake. Change to "starter" (always on) before real service: a till cannot wait.
+    plan: free
     region: singapore
     # --prod=false keeps the build tools (Nest CLI, TypeScript) even though NODE_ENV is production.
     buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm build:shared && pnpm exec prisma generate && pnpm --filter @serveos/api build
@@ -21,31 +23,22 @@ services:
         value: 22
       - key: STORAGE_PROVIDER
         value: database
-      - key: DATABASE_URL
-        sync: false
-      - key: DIRECT_URL
-        sync: false
+      - key: EMAIL_PROVIDER
+        value: dev
+      - key: PAYMENT_PROVIDER
+        value: none
+      - key: WEB_URL
+        value: https://app.serveros.me
+      - key: API_URL
+        value: https://api.serveros.me
+      - key: CORS_ORIGINS
+        value: https://app.serveros.me,https://kitchen.serveros.me
       - key: JWT_ACCESS_SECRET
         generateValue: true
       - key: JWT_REFRESH_SECRET
         generateValue: true
-      - key: WEB_URL
+      # The only two values you type in: the Neon connection strings.
+      - key: DATABASE_URL
         sync: false
-      - key: API_URL
-        sync: false
-      - key: CORS_ORIGINS
-        sync: false
-      - key: EMAIL_PROVIDER
-        value: dev # change to "resend" once EMAIL_API_KEY is set
-      - key: EMAIL_API_KEY
-        sync: false
-      - key: EMAIL_FROM
-        sync: false
-      - key: PAYMENT_PROVIDER
-        value: none # change to "razorpay" once the three payment values below are set
-      - key: PAYMENT_API_KEY
-        sync: false
-      - key: PAYMENT_API_SECRET
-        sync: false
-      - key: PAYMENT_WEBHOOK_SECRET
+      - key: DIRECT_URL
         sync: false

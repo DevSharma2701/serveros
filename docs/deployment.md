@@ -9,11 +9,11 @@ you meet each provider's current screens and limits.
 
 | Piece | Service | Cost | Address (example) |
 |---|---|---|---|
-| Web app + guest QR page | Cloudflare Pages | Free | `app.yourdomain.com` |
-| Kitchen display | Cloudflare Pages (second project) | Free | `kitchen.yourdomain.com` |
-| API | Render web service, smallest **paid** instance | A few dollars a month | `api.yourdomain.com` |
+| Web app + guest QR page | Cloudflare Pages | Free | `app.serveros.me` |
+| Kitchen display | Cloudflare Pages (second project) | Free | `kitchen.serveros.me` |
+| API | Render web service, smallest **paid** instance | A few dollars a month | `api.serveros.me` |
 | Database | Neon PostgreSQL | Free tier to start | — |
-| Email | Resend, from your domain | Free tier to start | `no-reply@yourdomain.com` |
+| Email | Resend, from your domain | Free tier to start | `no-reply@serveros.me` |
 | Payments | Razorpay | Per-transaction fee | — |
 
 Why the API is not on a free plan: free web services sleep when idle and take up to a minute
@@ -23,7 +23,7 @@ Free tiers and their terms change; check each provider's current limits before r
 (in particular, how long Neon keeps backups on its free plan).
 
 All three addresses must be on **your own domain**. The sign-in cookie is only sent between
-addresses on the same site, so `app.yourdomain.com` talking to an `onrender.com` address will
+addresses on the same site, so `app.serveros.me` talking to an `onrender.com` address will
 not keep you signed in.
 
 ## What you need to create (accounts)
@@ -55,14 +55,14 @@ environment settings (or your local `.env`, which git ignores).
   | `NODE_ENV` | `production` |
   | `DATABASE_URL`, `DIRECT_URL` | from Neon |
   | `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` | two different random strings, 48+ bytes each |
-  | `WEB_URL` | `https://app.yourdomain.com` |
-  | `API_URL` | `https://api.yourdomain.com` |
-  | `CORS_ORIGINS` | `https://app.yourdomain.com,https://kitchen.yourdomain.com` |
-  | `EMAIL_PROVIDER` / `EMAIL_API_KEY` / `EMAIL_FROM` | `resend` / key from Resend / `Your Restaurant <no-reply@yourdomain.com>` |
+  | `WEB_URL` | `https://app.serveros.me` |
+  | `API_URL` | `https://api.serveros.me` |
+  | `CORS_ORIGINS` | `https://app.serveros.me,https://kitchen.serveros.me` |
+  | `EMAIL_PROVIDER` / `EMAIL_API_KEY` / `EMAIL_FROM` | `resend` / key from Resend / `Your Restaurant <no-reply@serveros.me>` |
   | `PAYMENT_PROVIDER` | `none` for the pilot, `razorpay` when ready |
   | `PAYMENT_API_KEY` / `PAYMENT_API_SECRET` / `PAYMENT_WEBHOOK_SECRET` | from Razorpay (see step 6) |
 
-- Add the custom domain `api.yourdomain.com`.
+- Add the custom domain `api.serveros.me`.
 - The blueprint has not been deployed yet; expect to adjust small things on first use.
 - The API validates its configuration when it starts and stops with the name of anything wrong.
 
@@ -71,7 +71,7 @@ Run once, from your computer, with `DATABASE_URL`/`DIRECT_URL` temporarily point
 the same email settings as production (or use Render's shell):
 
 ```
-pnpm --filter @serveos/api create-restaurant -- --name "Your Restaurant" --legal-name "Your Company Pvt Ltd" --owner-name "Your Name" --owner-email you@yourdomain.com --outlet "Main" --code MAIN --state 29 --city Bengaluru
+pnpm --filter @serveos/api create-restaurant -- --name "Your Restaurant" --legal-name "Your Company Pvt Ltd" --owner-name "Your Name" --owner-email you@serveros.me --outlet "Main" --code MAIN --state 29 --city Bengaluru
 ```
 
 You receive an email with a link to choose your password (or, with no email provider yet, the
@@ -85,8 +85,8 @@ Two Pages projects from the same repository:
 |---|---|---|
 | Build command | `pnpm install --frozen-lockfile && pnpm build:shared && pnpm --filter @serveos/web build` | `pnpm install --frozen-lockfile && pnpm build:shared && pnpm --filter @serveos/kds build` |
 | Output directory | `apps/web/dist` | `apps/kds/dist` |
-| Variables | `VITE_API_URL=https://api.yourdomain.com`, `VITE_KDS_URL=https://kitchen.yourdomain.com` | `VITE_API_URL=https://api.yourdomain.com` |
-| Custom domain | `app.yourdomain.com` | `kitchen.yourdomain.com` |
+| Variables | `VITE_API_URL=https://api.serveros.me`, `VITE_KDS_URL=https://kitchen.serveros.me` | `VITE_API_URL=https://api.serveros.me` |
+| Custom domain | `app.serveros.me` | `kitchen.serveros.me` |
 
 Both apps include a `_redirects` file so page reloads and QR links (`/t/...`) open the app.
 `VITE_` values are public and baked in at build time: never put a secret in one.
@@ -99,7 +99,7 @@ sample invoices before the first real sale.
 ### 6. Razorpay (when you are ready for online payment)
 1. Dashboard → Account & Settings → API Keys: generate **test** keys. Set `PAYMENT_API_KEY`
    and `PAYMENT_API_SECRET`, and `PAYMENT_PROVIDER=razorpay`.
-2. Dashboard → Webhooks → add `https://api.yourdomain.com/api/v1/payments/webhooks/razorpay`,
+2. Dashboard → Webhooks → add `https://api.serveros.me/api/v1/payments/webhooks/razorpay`,
    choose a secret (16+ characters) and put the same value in `PAYMENT_WEBHOOK_SECRET`.
    Select the events **order.paid** and **payment.captured**.
 3. Make sure payments are set to capture automatically (Razorpay's default for most accounts).
