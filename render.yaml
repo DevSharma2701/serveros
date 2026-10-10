@@ -42,3 +42,69 @@ services:
         sync: false
       - key: DIRECT_URL
         sync: false
+    # Listed here so a blueprint sync keeps the address that was added in the dashboard.
+    domains:
+      - api.serveros.me
+
+  # ── Web app (POS, back office and the guest QR page): static files, free, always on ──
+  - type: web
+    name: serveos-web
+    runtime: static
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm build:shared && pnpm --filter @serveos/web build
+    staticPublishPath: apps/web/dist
+    pullRequestPreviewsEnabled: false
+    domains:
+      - app.serveros.me
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      # Public addresses, baked into the page at build time. Never put a secret in a VITE_ value.
+      - key: VITE_API_URL
+        value: https://api.serveros.me
+      - key: VITE_KDS_URL
+        value: https://kitchen.serveros.me
+    routes:
+      # A single-page app: any address that is not a real file (such as a table's QR link,
+      # /t/<code>) must open the app, which then shows the right screen.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+
+  # ── Kitchen display: static files, free, always on ──
+  - type: web
+    name: serveos-kitchen
+    runtime: static
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm build:shared && pnpm --filter @serveos/kds build
+    staticPublishPath: apps/kds/dist
+    pullRequestPreviewsEnabled: false
+    domains:
+      - kitchen.serveros.me
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: VITE_API_URL
+        value: https://api.serveros.me
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: X-Frame-Options
+        value: DENY

@@ -9,8 +9,8 @@ you meet each provider's current screens and limits.
 
 | Piece | Service | Cost | Address (example) |
 |---|---|---|---|
-| Web app + guest QR page | Cloudflare Pages | Free | `app.serveros.me` |
-| Kitchen display | Cloudflare Pages (second project) | Free | `kitchen.serveros.me` |
+| Web app + guest QR page | Render static site | Free | `app.serveros.me` |
+| Kitchen display | Render static site | Free | `kitchen.serveros.me` |
 | API | Render web service, smallest **paid** instance | A few dollars a month | `api.serveros.me` |
 | Database | Neon PostgreSQL | Free tier to start | — |
 | Email | Resend, from your domain | Free tier to start | `no-reply@serveros.me` |
@@ -29,7 +29,7 @@ not keep you signed in.
 ## What you need to create (accounts)
 
 1. A private GitHub repository, with this code pushed to it.
-2. Cloudflare account, with your domain's DNS managed there (simplest for Pages).
+2. (No separate front-end host: the web app and kitchen display are Render static sites.)
 3. Render account with a payment method.
 4. Neon account.
 5. Resend account; add your domain and the DNS records it gives you.
@@ -78,17 +78,17 @@ You receive an email with a link to choose your password (or, with no email prov
 link is printed for you). `db:seed`, `db:seed:orders`, `db:reset` and `db:migrate` refuse to
 run against any database that is not on your own computer.
 
-### 4. Web app and kitchen display (Cloudflare Pages)
-Two Pages projects from the same repository:
+### 4. Web app and kitchen display (Render static sites)
+Both are defined in `render.yaml` (`serveos-web` and `serveos-kitchen`), so Render creates and
+rebuilds them from the same blueprint as the API. Static sites are free and do not sleep.
+For each, add one CNAME record at Namecheap (Advanced DNS):
 
-| | Web app | Kitchen display |
-|---|---|---|
-| Build command | `pnpm install --frozen-lockfile && pnpm build:shared && pnpm --filter @serveos/web build` | `pnpm install --frozen-lockfile && pnpm build:shared && pnpm --filter @serveos/kds build` |
-| Output directory | `apps/web/dist` | `apps/kds/dist` |
-| Variables | `VITE_API_URL=https://api.serveros.me`, `VITE_KDS_URL=https://kitchen.serveros.me` | `VITE_API_URL=https://api.serveros.me` |
-| Custom domain | `app.serveros.me` | `kitchen.serveros.me` |
+| Host | Value |
+|---|---|
+| `app` | the `.onrender.com` address of `serveos-web` |
+| `kitchen` | the `.onrender.com` address of `serveos-kitchen` |
 
-Both apps include a `_redirects` file so page reloads and QR links (`/t/...`) open the app.
+The blueprint sends every unknown path to the app, so page reloads and QR links (`/t/...`) work.
 `VITE_` values are public and baked in at build time: never put a secret in one.
 
 ### 5. Set up the restaurant in the back office
@@ -133,6 +133,6 @@ are lost — a check with Razorpay every minute). Card and UPI details never rea
 
 ## Updating later
 
-Push to GitHub. Render rebuilds the API and applies database migrations on start; Cloudflare
-rebuilds the front ends. Migrations are forward-only, so take a database backup before a
+Push to GitHub. Render rebuilds the API (applying database migrations on start) and both
+front ends. Migrations are forward-only, so take a database backup before a
 release that changes the schema.
