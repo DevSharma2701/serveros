@@ -38,6 +38,7 @@ walk-through are in **[docs/setup.md](docs/setup.md)**.
 
 | | |
 |---|---|
+| [Handbook](HANDBOOK.md) | Start here: the whole project, the live setup, every setting and key, how to change things |
 | [Setup and daily use](docs/setup.md) | Install, run, demo logins, shortcuts, troubleshooting |
 | [Checklist](docs/CHECKLIST.md) | Honest status of every feature |
 | [Credentials](docs/credentials.md) | Every key and setting you must provide, where to get it, where to put it |
