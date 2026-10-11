@@ -24,6 +24,8 @@ export interface GatewayEvent {
   amountMinor: number;
   /** The provider's id for the money movement itself, needed later for refunds. */
   paymentRef?: string;
+  /** How the customer actually paid, when the provider says. They choose inside the provider's checkout. */
+  method?: 'UPI' | 'CARD' | 'WALLET' | 'OTHER';
   failureReason?: string;
 }
 
@@ -41,7 +43,7 @@ export interface PaymentGateway {
   /** Verifies the signed result the provider's checkout returned to the page. Throws if it is not genuine. */
   verifyCheckout?(fields: Record<string, string>): { providerRef: string; paymentRef: string };
   /** Asks the provider whether a payment request has been paid. */
-  fetchStatus?(providerRef: string): Promise<{ paid: boolean; amountMinor: number; paymentRef?: string }>;
+  fetchStatus?(providerRef: string): Promise<{ paid: boolean; amountMinor: number; paymentRef?: string; method?: GatewayEvent['method'] }>;
   refund(input: { providerRef: string; paymentRef: string; amountMinor: number }): Promise<void>;
 }
 
@@ -88,10 +90,16 @@ export class DevGateway implements PaymentGateway {
 const razorpayWebhook = z.object({
   event: z.string(),
   payload: z.object({
-    payment: z.object({ entity: z.object({ id: z.string(), order_id: z.string().nullable().optional(), amount: z.number().int() }) }).optional(),
+    payment: z.object({ entity: z.object({ id: z.string(), order_id: z.string().nullable().optional(), amount: z.number().int(), method: z.string().nullable().optional() }) }).optional(),
     order: z.object({ entity: z.object({ id: z.string(), amount: z.number().int(), amount_paid: z.number().int() }) }).optional(),
   }),
 });
+
+/** Razorpay's method names mapped to ours. Netbanking, EMI and anything new are recorded as OTHER. */
+function razorpayMethod(method: string | null | undefined): GatewayEvent['method'] {
+  if (!method) return undefined;
+  return method === 'upi' ? 'UPI' : method === 'card' ? 'CARD' : method === 'wallet' ? 'WALLET' : 'OTHER';
+}
 
 type Fetch = typeof fetch;
 
@@ -175,19 +183,20 @@ export class RazorpayGateway implements PaymentGateway {
     // "order.paid" means the whole request was captured. A failed attempt is not final: the
     // guest can try again inside the same checkout, so it is not treated as a failure here.
     if (event === 'order.paid' && payload.order) {
-      return { eventId, providerRef: payload.order.entity.id, outcome: 'success', amountMinor: payload.order.entity.amount_paid, paymentRef: payment?.id };
+      return { eventId, providerRef: payload.order.entity.id, outcome: 'success', amountMinor: payload.order.entity.amount_paid, paymentRef: payment?.id, method: razorpayMethod(payment?.method) };
     }
     if (event === 'payment.captured' && payment?.order_id) {
-      return { eventId, providerRef: payment.order_id, outcome: 'success', amountMinor: payment.amount, paymentRef: payment.id };
+      return { eventId, providerRef: payment.order_id, outcome: 'success', amountMinor: payment.amount, paymentRef: payment.id, method: razorpayMethod(payment.method) };
     }
     return null;
   }
 
-  async fetchStatus(providerRef: string): Promise<{ paid: boolean; amountMinor: number; paymentRef?: string }> {
+  async fetchStatus(providerRef: string): Promise<{ paid: boolean; amountMinor: number; paymentRef?: string; method?: GatewayEvent['method'] }> {
     const order = await this.call<{ status: string; amount_paid: number }>('GET', `/orders/${encodeURIComponent(providerRef)}`);
     if (order.status !== 'paid') return { paid: false, amountMinor: order.amount_paid };
-    const payments = await this.call<{ items: Array<{ id: string; status: string }> }>('GET', `/orders/${encodeURIComponent(providerRef)}/payments`);
-    return { paid: true, amountMinor: order.amount_paid, paymentRef: payments.items.find((p) => p.status === 'captured')?.id };
+    const payments = await this.call<{ items: Array<{ id: string; status: string; method?: string }> }>('GET', `/orders/${encodeURIComponent(providerRef)}/payments`);
+    const captured = payments.items.find((p) => p.status === 'captured');
+    return { paid: true, amountMinor: order.amount_paid, paymentRef: captured?.id, method: razorpayMethod(captured?.method) };
   }
 
   async refund(input: { providerRef: string; paymentRef: string; amountMinor: number }): Promise<void> {

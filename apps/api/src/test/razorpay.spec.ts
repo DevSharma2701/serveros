@@ -52,7 +52,7 @@ beforeAll(async () => {
     if (orderMatch) {
       const o = razorpay.orders.get(orderMatch[1]!);
       if (!o) return json({ error: { description: 'not found' } }, 404);
-      if (orderMatch[2]) return json({ items: o.paymentId ? [{ id: o.paymentId, status: 'captured' }] : [] });
+      if (orderMatch[2]) return json({ items: o.paymentId ? [{ id: o.paymentId, status: 'captured', method: 'card' }] : [] });
       return json({ id: orderMatch[1], status: o.status, amount_paid: o.status === 'paid' ? o.amount : 0 });
     }
     if (init.method === 'POST' && /^\/payments\/pay_\w+\/refund$/.test(path)) return razorpay.refuseRefunds ? json({ error: { description: 'insufficient balance in account' } }, 400) : json({ id: 'rfnd_1' });
@@ -93,9 +93,9 @@ const webhook = (body: object, eventId: string, secret = WEBHOOK_SECRET) => {
   const raw = JSON.stringify(body);
   return pub().post('/api/v1/payments/webhooks/razorpay').set('Content-Type', 'application/json').set('X-Razorpay-Signature', sign(secret, raw)).set('X-Razorpay-Event-Id', eventId).send(raw);
 };
-const orderPaid = (rzpOrder: string, paymentId: string, amount = 10_500) => ({
+const orderPaid = (rzpOrder: string, paymentId: string, amount = 10_500, method = 'netbanking') => ({
   event: 'order.paid',
-  payload: { order: { entity: { id: rzpOrder, amount, amount_paid: amount, status: 'paid' } }, payment: { entity: { id: paymentId, order_id: rzpOrder, amount, status: 'captured' } } },
+  payload: { order: { entity: { id: rzpOrder, amount, amount_paid: amount, status: 'paid' } }, payment: { entity: { id: paymentId, order_id: rzpOrder, amount, status: 'captured', method } } },
 });
 const saved = (guestToken: string) => prisma.order.findUniqueOrThrow({ where: { guestToken }, include: { payments: true, events: true } });
 
@@ -189,6 +189,19 @@ describe('webhooks', () => {
     expect((await webhook(orderPaid(rzpOrder, paymentId), 'evt_paid_1').expect(200)).body.status).toBe('duplicate');
     expect(await view(guestToken)).toMatchObject({ status: 'CONFIRMED', payment: { state: 'PAID' } });
     expect((await saved(guestToken)).payments[0]!.reference).toBe(paymentId);
+    // The guest chose netbanking inside Razorpay's window; that, not the page's guess, is what is recorded.
+    expect((await saved(guestToken)).payments[0]!.method).toBe('OTHER');
+  });
+
+  it('records how the guest really paid, even when the page return settles the payment first', async () => {
+    const { guestToken, rzpOrder } = await start();
+    const paymentId = razorpay.capture(rzpOrder);
+    await confirm(guestToken, rzpOrder, paymentId).expect(200); // the page does not know the method
+    expect((await saved(guestToken)).payments[0]!.method).toBe('UPI'); // still the placeholder
+    expect((await webhook(orderPaid(rzpOrder, paymentId, 10_500, 'wallet'), 'evt_method_late').expect(200)).body.status).toBe('already_final');
+    const o = await saved(guestToken);
+    expect(o.payments[0]!.method).toBe('WALLET');
+    expect(o.paidMinor).toBe(10_500); // the label changed; the money did not move twice
   });
 
   it('a failed attempt is not final: the guest can still pay the same request', async () => {
@@ -223,6 +236,7 @@ describe('when a confirmation never arrives', () => {
     await age(unpaid.guestToken, 3);
     expect(await app.get(PaymentsService).reconcilePending()).toBe(1);
     expect(await view(paid.guestToken)).toMatchObject({ status: 'CONFIRMED', payment: { state: 'PAID' } });
+    expect((await saved(paid.guestToken)).payments[0]!.method).toBe('CARD'); // as Razorpay reports it
     expect((await view(unpaid.guestToken)).payment.state).toBe('PENDING');
     expect(await app.get(PaymentsService).reconcilePending()).toBe(0); // nothing new the second time
   });

@@ -162,9 +162,16 @@ export class PaymentsService {
       // A payment the guest was told had expired can still be captured by the provider; it must be recorded so it can be refunded.
       const moved = await tx.payment.updateMany({
         where: { id: payment.id, state: succeeded ? { in: ['PENDING', 'CANCELLED'] } : 'PENDING' },
-        data: { state, failureReason, succeededAt: succeeded ? new Date() : null, ...(event.paymentRef ? { reference: event.paymentRef } : {}) },
+        data: { state, failureReason, succeededAt: succeeded ? new Date() : null, ...(event.paymentRef ? { reference: event.paymentRef } : {}), ...(succeeded && event.method ? { method: event.method } : {}) },
       });
-      if (moved.count === 0) return { status: 'already_final' as const, payment };
+      if (moved.count === 0) {
+        // Already settled by a faster route that did not know the method (the page's return does not
+        // say). The method is a label, not money, so it is safe to fill in from this later event.
+        if (succeeded && event.method && payment.state === 'SUCCEEDED' && payment.method !== event.method && payment.refundedMinor === 0) {
+          await tx.payment.update({ where: { id: payment.id }, data: { method: event.method } });
+        }
+        return { status: 'already_final' as const, payment };
+      }
       if (succeeded) {
         await this.applySuccess(tx, payment, { userId: null, userName: `${provider} gateway` });
         const order = await tx.order.findUniqueOrThrow({ where: { id: payment.orderId }, select: { status: true } });
@@ -216,7 +223,7 @@ export class PaymentsService {
       try {
         const status = await gateway.fetchStatus(payment.providerRef!);
         if (!status.paid) continue;
-        const outcome = await this.settle(gateway.name, { eventId: `reconcile:${payment.providerRef}`, providerRef: payment.providerRef!, outcome: 'success', amountMinor: status.amountMinor, paymentRef: status.paymentRef });
+        const outcome = await this.settle(gateway.name, { eventId: `reconcile:${payment.providerRef}`, providerRef: payment.providerRef!, outcome: 'success', amountMinor: status.amountMinor, paymentRef: status.paymentRef, method: status.method });
         if (outcome === 'processed') settled += 1;
       } catch {
         // The provider is unreachable or refused: leave the payment waiting and try again next time.
